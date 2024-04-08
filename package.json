@@ -1,0 +1,24 @@
+{
+  "name": "tomfoolery",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "bin": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "type": "commonjs",
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "hyperdht": "^6.14.0",
+    "pump": "^3.0.0"
+  },
+  "pkg": {
+    "scripts": "index.js",
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "."
+  }
+}

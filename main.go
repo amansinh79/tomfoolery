@@ -1,39 +1,31 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"net"
+	"io"
+	"net/http"
 	"os"
-	"strings"
 
 	"github.com/winfsp/cgofuse/fuse"
 )
 
 const (
-	filename = "hello world"
-	contents = "hello, world\n"
-	file     = "hello amanaaaaaaaa"
+	url = "http://localhost:3000/"
 )
 
 type Hellofs struct {
 	fuse.FileSystemBase
 }
 
-type ReaddirS struct {
-	Path string
+type Operation struct {
+	Op   string
 	Args map[string]interface{}
 }
 
 func (*Hellofs) Open(path string, flags int) (errc int, fh uint64) {
-	switch path {
-	case "/" + filename:
-		return 0, 0
-	default:
-		return -fuse.ENOENT, ^uint64(0)
-	}
+	return 0, 0
 }
 
 func (*Hellofs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) {
@@ -41,27 +33,49 @@ func (*Hellofs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) {
 	case "/":
 		stat.Mode = fuse.S_IFDIR | 0555
 		return 0
-	case "/" + filename:
-		stat.Mode = fuse.S_IFREG | 0444
-		stat.Size = int64(len(contents))
-		return 0
 
 	default:
-		stat.Mode = fuse.S_IFREG | 0444
-		stat.Size = int64(len(contents))
+		data := PerformOperation("getattr", path, map[string]interface{}{})
+
+		var m = struct {
+			IsDir bool
+			Size  int64
+		}{}
+
+		c := bytes.Buffer{}
+		c.Write(data)
+		d := gob.NewDecoder(&c)
+		err := d.Decode(&m)
+		if err != nil {
+			fmt.Println(`failed gob Decode`, err)
+		}
+
+		stat.Size = m.Size
+
+		if m.IsDir {
+			stat.Mode = fuse.S_IFDIR | 0555
+		} else {
+			stat.Mode = fuse.S_IFREG | 0444
+		}
+
 		return 0
 	}
 }
 
 func (*Hellofs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) {
+
 	endofst := ofst + int64(len(buff))
-	if endofst > int64(len(contents)) {
-		endofst = int64(len(contents))
-	}
+
 	if endofst < ofst {
 		return 0
 	}
-	n = copy(buff, contents[ofst:endofst])
+
+	data := PerformOperation("read", path, map[string]interface{}{
+		"offset": ofst,
+		"size":   endofst - ofst,
+	})
+
+	n = copy(buff, data)
 	return
 }
 
@@ -73,33 +87,102 @@ func (*Hellofs) Readdir(path string,
 	fill(".", nil, 0)
 	fill("..", nil, 0)
 
-	f, err := os.Open("./")
+	// file, err := os.Open("./" + path)
+	// if err != nil {
+	// 	fmt.Printf("failed opening directory: %s", err)
+	// }
+	// defer file.Close()
+
+	// fileList, _ := file.Readdir(0)
+
+	// for _, file := range fileList {
+	// 	fill(file.Name(), nil, 0)
+	// }
+
+	data := PerformOperation("readdir", path, map[string]interface{}{})
+
+	var m = []struct {
+		Name  string
+		IsDir bool
+		Size  int64
+	}{}
+	c := bytes.Buffer{}
+	c.Write(data)
+	d := gob.NewDecoder(&c)
+	err := d.Decode(&m)
 	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	files, err := f.Readdir(0)
-	if err != nil {
-		fmt.Println(err)
-		return
+		fmt.Println(`failed gob Decode`, err)
 	}
 
-	for _, v := range files {
-		fill(v.Name(), nil, 0)
+	for _, file := range m {
+		stat := fuse.Stat_t{}
+		stat.Size = file.Size
+		if file.IsDir {
+			stat.Mode = fuse.S_IFDIR | 0555
+		} else {
+			stat.Mode = fuse.S_IFREG | 0444
+		}
+		fill(file.Name, &stat, 0)
 	}
 
 	return 0
 }
 
-func main() {
+func (*Hellofs) Write(path string, buff []byte, ofst int64, fh uint64) (n int) {
 
-	gob.Register(map[string]interface{}{})
+	PerformOperation("write", path, map[string]interface{}{
+		"offset": ofst,
+		"data":   buff,
+	})
 
-	var s = ReaddirS{"readdir", map[string]any{
-		"path": "./",
-		"ofst": 6,
-		"fh":   0,
-	}}
+	return
+}
+
+func (*Hellofs) Statfs(path string, stat *fuse.Statfs_t) (errc int) {
+
+	stat.Bavail = 1000000
+	stat.Bsize = 4096
+	stat.Blocks = 1000000
+	stat.Bfree = 1000000
+	stat.Frsize = 4096
+	stat.Files = 1000000
+	stat.Ffree = 1000000
+	stat.Favail = 1000000
+	stat.Namemax = 255
+
+	return
+}
+
+func PerformOperation(op string, path string, args map[string]interface{}) []byte {
+
+	var s Operation
+	switch op {
+
+	case "readdir":
+		s = Operation{"readdir", map[string]any{
+			"path": path,
+			"args": args,
+		}}
+
+	case "getattr":
+		s = Operation{"getattr", map[string]any{
+			"path": path,
+			"args": args,
+		}}
+
+	case "read":
+		s = Operation{"read", map[string]any{
+			"path": path,
+			"args": args,
+		}}
+
+	case "write":
+		s = Operation{"write", map[string]any{
+			"path": path,
+			"args": args,
+		}}
+
+	}
 
 	b := bytes.Buffer{}
 	e := gob.NewEncoder(&b)
@@ -109,41 +192,27 @@ func main() {
 		fmt.Println(`failed gob Encode`, err)
 	}
 
-	//fmt.Println(b.Bytes())
+	resp, err := http.Post(url, "application/octet-stream", &b)
 
-	// m := ReaddirS{}
-	// c := bytes.Buffer{}
-	// c.Write(b.Bytes())
-	// d := gob.NewDecoder(&c)
-	// err = d.Decode(&m)
-	// if err != nil {
-	// 	fmt.Println(`failed gob Decode`, err)
-	// }
-
-	// fmt.Println(m.Args["ofst"])
-
-	// hellofs := &Hellofs{}
-	// host := fuse.NewFileSystemHost(hellofs)
-	// host.Mount("", os.Args[1:])
-
-	c, err := net.Dial("tcp", "localhost:3000")
 	if err != nil {
-		fmt.Println("Error:", err)
-		return
+		fmt.Println(`failed http post`, err)
 	}
 
-	for {
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print(">> ")
-		text, _ := reader.ReadString('\n')
-		fmt.Fprintf(c, text+"\n")
-
-		message, _ := bufio.NewReader(c).ReadString('\n')
-		fmt.Print("->: " + message)
-		if strings.TrimSpace(string(text)) == "STOP" {
-			c.Close()
-			fmt.Println("TCP client exiting...")
-			return
-		}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println(`failed to read response body`, err)
 	}
+
+	resp.Body.Close()
+
+	return bodyBytes
+
+}
+
+func main() {
+	gob.Register(map[string]interface{}{})
+
+	hellofs := &Hellofs{}
+	host := fuse.NewFileSystemHost(hellofs)
+	host.Mount("", os.Args[1:])
 }

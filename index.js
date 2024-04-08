@@ -1,21 +1,19 @@
-const net = require('net')
+const { spawn } = require("child_process");
+const DHT = require("hyperdht");
+const net = require("net");
+const pump = require("pump");
 
-
-const port = 3000;
-const host = '127.0.0.1';
-
+const node = new DHT();
 
 const server = net.createServer();
-server.listen(port, host, () => {
-    console.log('TCP Server is running on port ' + port +'.');
+server.listen(4000, () => {
+  console.log("TCP Server is running on port " + 4000 + ".");
 });
 
+server.on("connection", function (s) {
+  pump(s, node.connect(Buffer.from(process.argv[2], "hex")), s);
+});
 
-server.on('connection', function(sock) {
-
-    sock.on('data', function(data) {
-        console.log(data)
-        sock.write("reply\n");
-    });
-
+spawn("main.exe", {
+  stdio: "inherit",
 });
