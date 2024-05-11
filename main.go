@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	url = "http://localhost:3000/"
+	url = "http://localhost:4000/"
 )
 
-type Hellofs struct {
+type Fs struct {
 	fuse.FileSystemBase
 }
 
@@ -24,11 +24,29 @@ type Operation struct {
 	Args map[string]interface{}
 }
 
-func (*Hellofs) Open(path string, flags int) (errc int, fh uint64) {
-	return 0, 0
+func (*Fs) Open(path string, flags int) (errc int, fh uint64) {
+
+	data := PerformOperation("open", path, map[string]interface{}{
+		"flags": flags,
+	})
+
+	var m = struct {
+		Fh uint64
+	}{}
+
+	c := bytes.Buffer{}
+	c.Write(data)
+
+	d := gob.NewDecoder(&c)
+	err := d.Decode(&m)
+	if err != nil {
+		fmt.Println(`failed gob Decode`, err)
+	}
+
+	return 0, m.Fh
 }
 
-func (*Hellofs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) {
+func (*Fs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) {
 	switch path {
 	case "/":
 		stat.Mode = fuse.S_IFDIR | 0555
@@ -62,7 +80,7 @@ func (*Hellofs) Getattr(path string, stat *fuse.Stat_t, fh uint64) (errc int) {
 	}
 }
 
-func (*Hellofs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) {
+func (*Fs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) {
 
 	endofst := ofst + int64(len(buff))
 
@@ -79,7 +97,7 @@ func (*Hellofs) Read(path string, buff []byte, ofst int64, fh uint64) (n int) {
 	return
 }
 
-func (*Hellofs) Readdir(path string,
+func (*Fs) Readdir(path string,
 	fill func(name string, stat *fuse.Stat_t, ofst int64) bool,
 	ofst int64,
 	fh uint64) (errc int) {
@@ -128,61 +146,12 @@ func (*Hellofs) Readdir(path string,
 	return 0
 }
 
-func (*Hellofs) Write(path string, buff []byte, ofst int64, fh uint64) (n int) {
-
-	PerformOperation("write", path, map[string]interface{}{
-		"offset": ofst,
-		"data":   buff,
-	})
-
-	return
-}
-
-func (*Hellofs) Statfs(path string, stat *fuse.Statfs_t) (errc int) {
-
-	stat.Bavail = 1000000
-	stat.Bsize = 4096
-	stat.Blocks = 1000000
-	stat.Bfree = 1000000
-	stat.Frsize = 4096
-	stat.Files = 1000000
-	stat.Ffree = 1000000
-	stat.Favail = 1000000
-	stat.Namemax = 255
-
-	return
-}
-
 func PerformOperation(op string, path string, args map[string]interface{}) []byte {
 
-	var s Operation
-	switch op {
-
-	case "readdir":
-		s = Operation{"readdir", map[string]any{
-			"path": path,
-			"args": args,
-		}}
-
-	case "getattr":
-		s = Operation{"getattr", map[string]any{
-			"path": path,
-			"args": args,
-		}}
-
-	case "read":
-		s = Operation{"read", map[string]any{
-			"path": path,
-			"args": args,
-		}}
-
-	case "write":
-		s = Operation{"write", map[string]any{
-			"path": path,
-			"args": args,
-		}}
-
-	}
+	var s = Operation{op, map[string]any{
+		"path": path,
+		"args": args,
+	}}
 
 	b := bytes.Buffer{}
 	e := gob.NewEncoder(&b)
@@ -206,13 +175,12 @@ func PerformOperation(op string, path string, args map[string]interface{}) []byt
 	resp.Body.Close()
 
 	return bodyBytes
-
 }
 
 func main() {
 	gob.Register(map[string]interface{}{})
 
-	hellofs := &Hellofs{}
+	hellofs := &Fs{}
 	host := fuse.NewFileSystemHost(hellofs)
 	host.Mount("", os.Args[1:])
 }
